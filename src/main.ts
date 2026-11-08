@@ -12,7 +12,7 @@ import { KeyboardLayout, rangeForNotes } from './render/keyboardLayout';
 import { PianoView } from './render/pianoView';
 import { KeyboardInput } from './input/keyboardInput';
 import { MidiInput } from './input/midiInput';
-import { MicInput, type MicEvent } from './input/micInput';
+import { MicInput, type MicEvent, type MicState } from './input/micInput';
 import { PianoSynth } from './audio/synth';
 
 // ---------- inställningar (sparas lokalt) ----------
@@ -59,6 +59,13 @@ function save(key: string, value: unknown): void {
   }
 }
 
+const firstVisit = (() => {
+  try {
+    return localStorage.getItem('tp.settings') === null;
+  } catch {
+    return true;
+  }
+})();
 const settings: Settings = load('tp.settings', DEFAULTS);
 let customSongs: Song[] = (() => {
   try {
@@ -79,6 +86,9 @@ const stepCount = $('step-count');
 const micMeter = $('mic-meter');
 const micLevel = $('mic-level');
 const micNote = $('mic-note');
+const micStatus = $('mic-status');
+const resumeMicBtn = $<HTMLButtonElement>('resume-mic');
+const startDialog = $('start');
 const toastEl = $('toast');
 const hint = $('hint');
 const songNote = $('song-note');
@@ -216,6 +226,7 @@ async function setInput(kind: Settings['input']): Promise<void> {
   mic?.stop();
   mic = null;
   micMeter.classList.add('hidden');
+  resumeMicBtn.classList.add('hidden');
   view.micPitch = null;
   settings.input = kind;
   save('tp.settings', settings);
@@ -229,22 +240,81 @@ async function setInput(kind: Settings['input']): Promise<void> {
       await midi.start();
     } else if (kind === 'mic') {
       stopDemo();
-      mic = new MicInput(handleMicEvents, (lvl) => {
-        const pct = Math.max(0, Math.min(100, ((lvl.db + 70) / 60) * 100));
-        micLevel.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
-        micNote.textContent = lvl.pitch ? noteName(Math.round(lvl.pitch.midi), settings.naming) : '–';
-        view.micPitch = lvl.pitch ? lvl.pitch.midi : null;
-      });
+      micMeter.classList.remove('hidden');
+      setMicStatus('starting');
+      // OBS: mic.start() måste anropas utan await före, direkt i användarens tryck (iOS).
+      mic = new MicInput(handleMicEvents, onMicLevel, onMicState);
       await mic.start({ a4: settings.a4, sensitivity: settings.sensitivity });
       mic.setExpected(session.expected);
-      micMeter.classList.remove('hidden');
-      toast(`Mikrofon aktiv${mic.deviceLabel ? `: ${mic.deviceLabel}` : ''} (${Math.round(mic.sampleRate / 1000)} kHz)`);
+      micLevelLog = [];
+      toast(`Mikrofonen lyssnar${mic.deviceLabel ? ` (${mic.deviceLabel})` : ''}. Spela tonen som lyser!`);
     }
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
     if (kind !== 'keyboard') void setInput('keyboard');
   }
 }
+
+// ---------- mikrofonstatus ----------
+
+let micLevelLog: { t: number; db: number }[] = [];
+let weakHintShown = false;
+
+function setMicStatus(state: MicState | 'starting'): void {
+  micStatus.classList.toggle('on', state === 'running');
+  micStatus.classList.toggle('off', state === 'paused' || state === 'ended');
+  micStatus.title = state === 'running' ? 'Lyssnar' : state === 'starting' ? 'Startar…' : 'Pausad';
+}
+
+function onMicState(state: MicState): void {
+  setMicStatus(state);
+  if (settings.input !== 'mic') return;
+  if (state === 'running') resumeMicBtn.classList.add('hidden');
+  else {
+    resumeMicBtn.textContent = state === 'ended' ? '🎤 Mikrofonen stängdes – tryck för att starta igen' : '🎤 Ljudet pausades – tryck för att fortsätta lyssna';
+    resumeMicBtn.classList.remove('hidden');
+  }
+}
+
+function onMicLevel(lvl: { db: number; pitch: { midi: number } | null }): void {
+  const pct = Math.max(0, Math.min(100, ((lvl.db + 75) / 60) * 100));
+  micLevel.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+  micNote.textContent = lvl.pitch ? noteName(Math.round(lvl.pitch.midi), settings.naming) : '–';
+  view.micPitch = lvl.pitch ? lvl.pitch.midi : null;
+  // Hör mikrofonen nästan ingenting på länge? Tipsa (en gång).
+  const now = performance.now();
+  micLevelLog.push({ t: now, db: lvl.db });
+  micLevelLog = micLevelLog.filter((x) => now - x.t < 10000);
+  if (!weakHintShown && micLevelLog.length > 200 && micLevelLog[0].t < now - 9000 && Math.max(...micLevelLog.map((x) => x.db)) < -62) {
+    weakHintShown = true;
+    toast('Mikrofonen hör nästan inget. Lägg telefonen närmare pianot (på notstället) eller höj känsligheten i ⚙.', true);
+  }
+}
+
+resumeMicBtn.addEventListener('click', () => {
+  if (mic && (mic.state === 'suspended' || mic.state === 'interrupted')) {
+    mic.resume();
+    resumeMicBtn.classList.add('hidden');
+  } else {
+    // Mikrofonen är stoppad (t.ex. efter omladdning) – starta om, direkt i trycket.
+    void setInput('mic');
+  }
+});
+// Varje tryck på sidan försöker väcka pausat ljud (iOS pausar t.ex. vid appbyte).
+window.addEventListener('pointerdown', () => mic?.resume(), true);
+
+// ---------- startdialog ----------
+
+if (!MidiInput.supported()) {
+  $<HTMLButtonElement>('choice-midi').disabled = true;
+  $('midi-note').textContent = 'Stöds inte i den här webbläsaren (Safari/iPhone). Använd Chrome eller Edge på dator/Android.';
+}
+document.querySelectorAll<HTMLButtonElement>('[data-start]').forEach((b) =>
+  b.addEventListener('click', () => {
+    startDialog.classList.add('hidden');
+    void setInput(b.dataset.start as Settings['input']);
+  }),
+);
 
 function handleMicEvents(events: MicEvent[]): void {
   for (const e of events) {
@@ -596,7 +666,21 @@ new ResizeObserver(() => {
 }).observe(canvas);
 syncSettingsUi();
 loadSong(allSongs().find((s) => s.id === settings.songId) ?? LIBRARY[0]);
-void setInput(settings.input === 'mic' ? 'keyboard' : settings.input); // mikrofon kräver ett klick (tillstånd)
+if (firstVisit) {
+  // Första besöket: fråga hur man spelar (ett tryck behövs ändå för mikrofonen på iOS).
+  startDialog.classList.remove('hidden');
+} else if (settings.input === 'mic') {
+  // Mikrofonen kräver ett tryck efter omladdning (webbläsarens regler för ljud).
+  void setInput('keyboard').then(() => {
+    settings.input = 'mic';
+    save('tp.settings', settings);
+    document.querySelectorAll<HTMLButtonElement>('.segmented button').forEach((b) => b.classList.toggle('active', b.dataset.input === 'mic'));
+    resumeMicBtn.textContent = '🎤 Tryck här för att starta mikrofonen';
+    resumeMicBtn.classList.remove('hidden');
+  });
+} else {
+  void setInput(settings.input);
+}
 
 let last = performance.now();
 function frame(now: number): void {

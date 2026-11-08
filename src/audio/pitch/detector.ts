@@ -44,7 +44,14 @@ interface EvalWindow {
   /** Senaste MPM-tonhöjder under fönstret (för fel-ton-feedback). */
   pitches: number[];
   closed: boolean;
+  /** Skapat av den riktade (tonspecifika) anslagsdetektorn – rapporterar inte "fel ton". */
+  targeted?: boolean;
 }
+
+/** Antal hop som den riktade anslagsdetektorn ser bakåt (~350 ms). */
+const TARGET_HISTORY = 32;
+/** Energiökning (linjär amplitud) på förväntad tons deltoner som räknas som anslag (≈ +10 dB). */
+const TARGET_RISE = 3.2;
 
 export class NoteDetector {
   readonly sampleRate: number;
@@ -69,6 +76,11 @@ export class NoteDetector {
   private frame: Float64Array;
 
   private magHistory: Float64Array[] = [];
+  /** Per förväntad ton: energi på dess första deltoner, ett värde per hop. */
+  private noteEnergy = new Map<number, number[]>();
+  /** Antal hop i rad som stigningsvillkoret varit uppfyllt per ton. */
+  private targetStreak = new Map<number, number>();
+  private lastTargetHop = -1000;
   private prevShortLog: Float64Array | null = null;
   private fluxHistory: number[] = [];
   private lastFlux = [0, 0];
@@ -80,6 +92,8 @@ export class NoteDetector {
   private windows: EvalWindow[] = [];
   private lastConfirmTime = -Infinity;
 
+  /** Valfri felsökningskrok: anropas för varje utvärdering av en förväntad ton. */
+  onEvaluate?: (midi: number, evidence: NoteEvidence, ageSec: number) => void;
   /** Senaste nivå i dBFS (för nivåmätare). */
   levelDb = -100;
   /** Senaste tydliga tonhöjd (för visning). */
@@ -105,6 +119,9 @@ export class NoteDetector {
   /** Sätt vilka toner som förväntas just nu (nästa steg i låten). */
   setExpected(midis: readonly number[]): void {
     this.expected = [...midis];
+    // Den riktade anslagsdetektorn börjar om: bara stigningar EFTER detta räknas.
+    this.noteEnergy = new Map(this.expected.map((m) => [m, []]));
+    this.targetStreak.clear();
     // Anslag som redan godkänt föregående steg får inte räknas igen för nästa
     // (annars skulle t.ex. "G G" klaras av med ett enda anslag).
     for (const w of this.windows) if (w.onsetTime <= this.lastConfirmTime) w.closed = true;
@@ -145,6 +162,76 @@ export class NoteDetector {
     return events;
   }
 
+  private partialEnergy(mag: Float64Array, midi: number): number {
+    const f0 = midiToFreq(midi, this.a4);
+    const binHz = this.sampleRate / this.longSize;
+    let e = 0;
+    for (let h = 1; h <= 3; h++) {
+      const f = h * f0 * Math.sqrt(1 + 0.0004 * h * h);
+      const lo = Math.max(1, Math.floor(Math.min((f * 0.977) / binHz, f / binHz - 1)));
+      const hi = Math.min(mag.length - 1, Math.ceil(Math.max((f * 1.024) / binHz, f / binHz + 1)));
+      let m = 0;
+      for (let k = lo; k <= hi; k++) if (mag[k] > m) m = mag[k];
+      e += m;
+    }
+    return e;
+  }
+
+  private detectTargetedOnsets(mag: Float64Array, t: number, events: DetectorEvent[]): void {
+    const floor = bandMedian(mag, this.sampleRate, this.longSize);
+    for (const midi of this.expected) {
+      const hist = this.noteEnergy.get(midi);
+      if (!hist) continue;
+      const e = this.partialEnergy(mag, midi);
+      hist.push(e);
+      if (hist.length > TARGET_HISTORY) hist.shift();
+      if (hist.length < 4) continue;
+      // Minsta energin under de senaste ~350 ms (ej de allra senaste hoppen).
+      let minIdx = 0;
+      for (let i = 1; i < hist.length - 2; i++) if (hist[i] < hist[minIdx]) minIdx = i;
+      const minE = hist[minIdx];
+      const loud = e > floor * 3 * 8; // deltonerna i snitt ~18 dB över brusgolvet
+      if (!(e > minE * TARGET_RISE && loud)) {
+        this.targetStreak.set(midi, 0);
+        continue;
+      }
+      // Inom ett långt FFT-fönster (+ marginal) efter ett anslag stiger energin fortfarande
+      // av SAMMA anslag (fönstret fylls). Då får den riktade detektorn inte lösa ut –
+      // annars kunde ett enda anslag räknas två gånger (t.ex. för "G G").
+      const settle = Math.ceil(this.longSize / this.hop) + 6;
+      const recent = this.windows.some((w) => this.hopCount - w.onsetHop < settle);
+      if (recent || this.hopCount - this.lastTargetHop < settle) {
+        hist.splice(0, hist.length - 1);
+        this.targetStreak.set(midi, 0);
+        continue;
+      }
+      // Ge den globala anslagsdetektorn företräde: stigningen måste hålla i sig några hop.
+      const streak = (this.targetStreak.get(midi) ?? 0) + 1;
+      this.targetStreak.set(midi, streak);
+      if (streak < 3) continue;
+      // Anslagstid ≈ sista hoppet där energin fortfarande låg nära miniminivån.
+      let startIdx = minIdx;
+      for (let i = minIdx; i < hist.length; i++) if (hist[i] <= minE * 1.5) startIdx = i;
+      const back = hist.length - 1 - startIdx;
+      const refIdx = Math.max(0, this.magHistory.length - 1 - back);
+      this.lastTargetHop = this.hopCount;
+      this.targetStreak.set(midi, 0);
+      this.windows.push({
+        onsetTime: t - (back * this.hop) / this.sampleRate,
+        onsetHop: this.hopCount - back,
+        ref: this.magHistory[refIdx],
+        found: new Set(),
+        candidates: new Map(),
+        pitches: [],
+        closed: false,
+        targeted: true,
+      });
+      if (this.windows.length > 4) this.windows.shift();
+      events.push({ type: 'onset', time: t, strength: e / Math.max(minE, 1e-12) });
+      hist.splice(0, hist.length - 1);
+    }
+  }
+
   private processHop(events: DetectorEvent[]): void {
     const N = this.longSize;
     // Linjärisera ringbufferten (äldst först).
@@ -181,37 +268,45 @@ export class NoteDetector {
 
     // Peak picking med en hops fördröjning: flux[t-1] är lokal topp över tröskeln.
     const [f2, f1] = this.lastFlux; // f2 = t-2, f1 = t-1
-    const hist = this.fluxHistory.slice(-24).sort((a, b) => a - b);
+    // Adaptiv tröskel från bakgrundens egen statistik: median + k·MAD (medianavvikelse).
+    // Vid starkt brus är bakgrundsflödet högt men jämnt, så tröskeln följer spridningen
+    // i stället för att multiplicera medianen (vilket missade svaga anslag).
+    const hist = this.fluxHistory.slice(-32).sort((a, b) => a - b);
     const med = hist.length ? hist[Math.floor(hist.length / 2)] : 0;
-    const delta = 6 + 10 * (1 - this.sensitivity);
+    const devs = hist.map((v) => Math.abs(v - med)).sort((a, b) => a - b);
+    const mad = devs.length ? devs[Math.floor(devs.length / 2)] : 0;
+    const kMad = 3 + 3 * (1 - this.sensitivity);
+    const minDelta = 3 + 6 * (1 - this.sensitivity);
     // Efter ett starkt anslag höjs tröskeln tillfälligt (avklingar på ~150 ms) så att
     // efterklang/dubbeltoppar i samma anslag inte räknas som ett nytt anslag.
     const sinceLast = ((this.hopCount - 1 - this.lastOnsetHop) * this.hop) / this.sampleRate;
     const masking = this.lastOnsetStrength * 0.5 * Math.exp(-sinceLast / 0.15);
-    const threshold = Math.max(med * 1.8 + delta, masking);
-    const gate = Math.max(0.0003, this.noiseRms * 3);
+    const threshold = Math.max(med + Math.max(minDelta, kMad * mad), masking);
+    // Låg spärr: en telefon en bit från pianot ger bara ~10–20 dB över bruset.
+    // Själva anslagsbeslutet tas av flödet (flux) med adaptiv tröskel.
+    const gate = Math.max(0.00015, this.noiseRms * 1.6);
     const isOnset = f1 > threshold && f1 >= f2 && f1 >= flux && rms > gate && this.hopCount - this.lastOnsetHop > 5;
     this.lastFlux = [f1, flux];
     this.fluxHistory.push(flux);
     if (this.fluxHistory.length > 64) this.fluxHistory.shift();
 
     // Brusnivå ("minimum statistics"): följer snabbt nedåt, kryper långsamt uppåt
-    // (≈ +2 dB/s), så att ihållande toner inte tolkas som brus.
+    // (≈ +0,5 dB/s), så att ihållande toner inte tolkas som brus.
     if (rms < this.noiseRms) this.noiseRms = 0.7 * this.noiseRms + 0.3 * rms;
-    else this.noiseRms = Math.min(rms, this.noiseRms * 1.0025);
+    else this.noiseRms = Math.min(rms, this.noiseRms * 1.0006);
 
     // --- Lång FFT ---
     this.longFft.forwardReal(this.frame, this.longWin);
     const mag = new Float64Array(N / 2 + 1);
     this.longFft.magnitudes(mag, this.longScale);
     this.magHistory.push(mag);
-    if (this.magHistory.length > 4) this.magHistory.shift();
+    if (this.magHistory.length > TARGET_HISTORY) this.magHistory.shift();
 
     if (isOnset && this.filled >= N / 4) {
       this.lastOnsetHop = this.hopCount - 1;
       this.lastOnsetStrength = f1;
       // Referens = spektrum från innan anslaget nådde det långa fönstret märkbart.
-      const ref = this.magHistory[0];
+      const ref = this.magHistory[Math.max(0, this.magHistory.length - 4)];
       this.windows.push({
         onsetTime: t - this.hop / this.sampleRate,
         onsetHop: this.hopCount - 1,
@@ -224,6 +319,12 @@ export class NoteDetector {
       if (this.windows.length > 4) this.windows.shift();
       events.push({ type: 'onset', time: t, strength: f1 });
     }
+
+    // --- Riktad anslagsdetektion ---
+    // Vi vet vilka toner som väntas, så vi bevakar energin på just deras deltoner.
+    // Stiger den kraftigt räknas det som ett anslag även om det globala flödet
+    // inte märkte något (svagt anslag, brus, efterklang från föregående ton).
+    this.detectTargetedOnsets(mag, t, events);
 
     // --- Monofon tonhöjd (visning / fel-ton) ---
     if (rms > gate && this.hopCount % 2 === 0) {
@@ -247,7 +348,7 @@ export class NoteDetector {
       const age = this.hopCount - w.onsetHop;
       if (age > evalHops) {
         w.closed = true;
-        if (w.found.size === 0 && w.pitches.length >= 2) {
+        if (w.found.size === 0 && !w.targeted && w.pitches.length >= 2) {
           // Inget förväntat hittades: vanligaste tydliga tonhöjden = fel ton.
           const counts = new Map<number, number>();
           for (const p of w.pitches) counts.set(p, (counts.get(p) ?? 0) + 1);
@@ -276,6 +377,21 @@ export class NoteDetector {
         // fler perioder i fönstret innan beslutet är tillförlitligt.
         if (ageSec < Math.min(0.2, 24 / midiToFreq(midi, this.a4))) continue;
         const ev = evaluateNote(view, midi, { a4: this.a4, minSnr, alsoExpected: this.expected, peakRef: maxDiff });
+        // Riktade anslag (utan globalt flöde) är en reserv för svaga/brusiga lägen. De
+        // måste även hålla mot HELA spektrumet: en klingande lägre ton vars delton råkar
+        // "blomma upp" får inte se ut som en ny ton.
+        if (ev.present && w.targeted) {
+          const full = evaluateNote({ mag, sampleRate: this.sampleRate, fftSize: N, floor: magFloor }, midi, {
+            a4: this.a4,
+            minSnr,
+            alsoExpected: this.expected,
+          });
+          if (!full.present) {
+            ev.present = false;
+            ev.reason = `helspektrum: ${full.reason}`;
+          }
+        }
+        this.onEvaluate?.(midi, ev, ageSec);
         if (!ev.present) continue;
         // Tonen måste synas i flera hop i rad – slumpmässiga toppar från anslagets
         // brus (hammarslag) och tidiga, ännu ej utvecklade spektra sorteras bort.

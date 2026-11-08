@@ -165,7 +165,11 @@ export function evaluateNote(view: SpectrumView, midi: number, opts: EvidenceOpt
     ev.reason = 'utanför frekvensområdet';
     return ev;
   }
-  const present = partials.map((p) => p.snr >= o.minSnr);
+  // Två nivåer: grundtonen måste vara tydlig (minSnr), medan stödjande övertoner
+  // räcker med en lägre nivå – vid låg mikrofonnivå drunknar de svagare övertonerna
+  // annars i bruset fast tonen hörs tydligt.
+  const weakSnr = Math.max(3, o.minSnr / 3);
+  const present = partials.map((p, i) => p.snr >= (i === 0 ? o.minSnr : weakSnr));
   const nPresent = present.filter(Boolean).length;
   ev.score = partials.reduce((s, p) => s + (p.snr > 1 ? (20 * Math.log10(p.snr)) / p.harmonic : 0), 0);
 
@@ -251,7 +255,9 @@ export function evaluateNote(view: SpectrumView, midi: number, opts: EvidenceOpt
       const m = measure(view, f, 1, o.toleranceCents);
       if (m.snr >= o.minSnr) unshared = Math.max(unshared, m.amp);
     }
-    if (unshared >= ownRef * 0.15) {
+    // 0.35: den lägre tonens egna deltoner måste vara jämförbara med våra. Svagare
+    // energi där kommer typiskt från klangbottenresonans/medsvängning, inte en spelad ton.
+    if (unshared >= ownRef * 0.35) {
       ev.reason = `låter som ${sub.label}`;
       return ev;
     }

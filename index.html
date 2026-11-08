@@ -46,6 +46,7 @@
             <button data-input="mic" title="Akustiskt piano via mikrofon">Mikrofon</button>
           </div>
           <div id="mic-meter" class="mic-meter hidden" title="Mikrofonnivå">
+            <span id="mic-status" class="mic-status">●</span>
             <div class="mic-track"><div id="mic-level" class="mic-level"></div></div>
             <span id="mic-note" class="mic-note">–</span>
           </div>
@@ -132,6 +133,30 @@
           </div>
         </div>
       </div>
+
+      <div id="start" class="modal hidden" role="dialog" aria-label="Välj hur du spelar">
+        <div class="modal-card">
+          <h2>Hur spelar du?</h2>
+          <p class="small">Appen väntar på varje ton tills du spelat den på ditt piano.</p>
+          <div class="choices">
+            <button class="choice" data-start="mic">
+              <span class="choice-icon">🎤</span>
+              <span><strong>Akustiskt piano</strong><small>Appen lyssnar via mikrofonen. Lägg telefonen/surfplattan på notstället.</small></span>
+            </button>
+            <button class="choice" data-start="midi" id="choice-midi">
+              <span class="choice-icon">🎹</span>
+              <span><strong>Digitalpiano med kabel</strong><small id="midi-note">USB- eller Bluetooth-MIDI (Chrome/Edge). Mest exakt.</small></span>
+            </button>
+            <button class="choice" data-start="keyboard">
+              <span class="choice-icon">⌨️</span>
+              <span><strong>Bara testa</strong><small>Datorns tangentbord eller tryck på skärmen.</small></span>
+            </button>
+          </div>
+          <p class="small">Du kan byta när som helst uppe till höger.</p>
+        </div>
+      </div>
+
+      <button id="resume-mic" class="resume-mic hidden">🎤 Tryck här för att starta mikrofonen</button>
 
       <div id="drop" class="drop hidden">Släpp MIDI- eller MusicXML-filen här</div>
     </div>

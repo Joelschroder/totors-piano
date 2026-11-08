@@ -56,11 +56,20 @@ av fyra delar:
    - en mycket starkare grannton avvisar tonen, eftersom toppen då troligen är läckage
    - frekvenser som förklaras av andra toner i samma ackord ignoreras i spärrarna, så att ackord
      fungerar
-4. **Bekräftelse.** Tonen måste synas i tre analyssteg i rad (cirka 30 ms). Låga toner får vänta
+4. **Riktad anslagsdetektion (reserv).** Eftersom vi vet vilken ton som väntas bevakas också
+   energin på just dess deltoner. Stiger den ~10 dB räknas det som ett anslag även när det
+   globala flödet drunknar i brus eller efterklang. Sådana anslag måste också hålla mot hela
+   spektrumet, så att en klingande ton vars delton "blommar upp" inte misstas för en ny ton.
+5. **Bekräftelse.** Tonen måste synas i tre analyssteg i rad (cirka 30 ms). Låga toner får vänta
    några perioder extra innan beslutet tas.
 
 En monofon MPM-detektor (McLeod Pitch Method) körs parallellt. Den visar vilken ton som hörs (▼
 ovanför klaviaturen) och ger röd feedback vid fel ton.
+
+**iPhone/iPad (Safari):** ljudmotorn (AudioContext) skapas direkt i användarens tryck, innan
+mikrofontillståndet efterfrågas. Insamlingsnoden kopplas till högtalarutgången via en nollad
+förstärkare (annars bearbetar Safari den inte), och om iOS pausar ljudet (samtal, appbyte) visas
+en knapp för att fortsätta. Efter omladdning krävs ett tryck för att starta mikrofonen igen.
 
 Allt körs i en **Web Worker**. Ljudet går AudioWorklet → MessagePort → Worker utan att passera
 huvudtråden, så grafiken får full bildfrekvens. Webbläsarens ekosläckning, brusreducering och
@@ -75,6 +84,10 @@ pianoinspelningarna):
 - Latens: cirka 50 ms i diskanten, 75–120 ms i mellanregistret och upp till 220 ms i djup bas.
 - Ackord (3–4 toner), brutna ackord, ackord med en fel ton, upprepade toner, legato, svaga anslag
   (−20 dB), tystnad och brus.
+- **Rumssimulering** (`tests/room.test.ts`): hela melodin genom efterklang (RT60 0,5–1,2 s),
+  högpass som en telefonmikrofon, brus och låg nivå (−20/−26 dB, dvs. telefon några meter bort):
+  21/21 steg. Dessutom en variant där en *fel* ton (halvton/oktav/kvint) spelas före varje rätt
+  ton: ingen fel ton för låten framåt.
 - Hela kedjan har också testats i Chromium med en inspelad melodi som falsk mikrofon. Alla 21
   steg i "Ja, må han leva" klarades, och en insprängd fel ton gav "fel" utan att appen gick vidare.
 
