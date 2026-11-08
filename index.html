@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070f" />
+    <title>Totors Piano</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22"><rect x="2" y="4" width="20" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 4v9M12 4v16M16 4v9" stroke="currentColor" stroke-width="1.8"/><rect x="6.5" y="4" width="3" height="9" rx="0.8" fill="currentColor"/><rect x="14.5" y="4" width="3" height="9" rx="0.8" fill="currentColor"/></svg>
+          </span>
+          <span class="brand-name">Totors Piano</span>
+        </div>
+
+        <div class="group song-group">
+          <select id="song-select" aria-label="Välj låt"></select>
+          <button id="btn-edit" class="ghost" title="Skriv eller ändra låt (textnotation)">Redigera</button>
+          <label class="ghost button" title="Importera MIDI (.mid) eller MusicXML (.musicxml, .xml, .mxl)">
+            Importera
+            <input id="file-input" type="file" accept=".mid,.midi,.musicxml,.xml,.mxl,.txt" hidden />
+          </label>
+        </div>
+
+        <div class="group status">
+          <div class="next">
+            <span class="next-label">Nästa</span>
+            <span id="next-notes" class="next-notes">–</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+            <span id="step-count" class="step-count">0 / 0</span>
+          </div>
+        </div>
+
+        <div class="group input-group">
+          <div class="segmented" role="radiogroup" aria-label="Ingång">
+            <button data-input="keyboard" class="active" title="Datorns tangentbord och mus">Tangentbord</button>
+            <button data-input="midi" title="Digitalpiano via USB/Bluetooth MIDI (mest exakt)">MIDI</button>
+            <button data-input="mic" title="Akustiskt piano via mikrofon">Mikrofon</button>
+          </div>
+          <div id="mic-meter" class="mic-meter hidden" title="Mikrofonnivå">
+            <div class="mic-track"><div id="mic-level" class="mic-level"></div></div>
+            <span id="mic-note" class="mic-note">–</span>
+          </div>
+          <button id="btn-listen" class="ghost" title="Spela upp låten (lyssna och se)">▶ Lyssna</button>
+          <button id="btn-restart" class="ghost" title="Börja om (R)">↺</button>
+          <button id="btn-settings" class="ghost" title="Inställningar">⚙</button>
+        </div>
+      </header>
+
+      <div id="toast" class="toast hidden"></div>
+
+      <main class="stage">
+        <canvas id="view"></canvas>
+        <div class="overlay-top">
+          <div id="hint" class="hint">
+            <span class="hint-desktop">Spela tangenten som lyser. Tangentbord: <kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd><kbd>G</kbd><kbd>H</kbd><kbd>J</kbd><kbd>K</kbd> = C–C, <kbd>W</kbd><kbd>E</kbd><kbd>T</kbd><kbd>Y</kbd><kbd>U</kbd> = svarta, <kbd>Z</kbd>/<kbd>X</kbd> oktav, <kbd>←</kbd><kbd>→</kbd> steg.</span>
+            <span class="hint-touch">Tryck på tangenten som lyser – eller välj MIDI/Mikrofon och spela på ditt piano.</span>
+          </div>
+          <div id="song-note" class="song-note hidden"></div>
+        </div>
+      </main>
+
+      <aside id="settings" class="panel hidden" aria-label="Inställningar">
+        <h2>Inställningar</h2>
+        <label>Hand
+          <select id="set-hands">
+            <option value="both">Båda händerna</option>
+            <option value="R">Höger hand</option>
+            <option value="L">Vänster hand</option>
+          </select>
+        </label>
+        <label>Tonnamn
+          <select id="set-naming">
+            <option value="svensk">Svenska (… A B H)</option>
+            <option value="international">Internationella (… A A# B)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="set-labels" /> Namn på alla tangenter</label>
+        <label class="check"><input type="checkbox" id="set-ghost" checked /> Visa andra handen svagt</label>
+        <label>Zoom (taktslag synliga): <span id="zoom-val"></span>
+          <input type="range" id="set-zoom" min="3" max="16" step="1" />
+        </label>
+        <label class="check"><input type="checkbox" id="set-sound" checked /> Ljud från appen (tangentbord/mus/MIDI)</label>
+        <hr />
+        <h3>Mikrofon</h3>
+        <label>Känslighet: <span id="sens-val"></span>
+          <input type="range" id="set-sens" min="0" max="1" step="0.05" />
+        </label>
+        <label>Stämning A4 (Hz): <span id="a4-val"></span>
+          <input type="range" id="set-a4" min="430" max="450" step="0.5" />
+        </label>
+        <p class="small">Tips: placera telefonen/datorn nära pianot, undvik bakgrundsljud. Om ditt piano är ostämt, justera A4. Ljudet från appen stängs av i mikrofonläget så att det inte hörs i mikrofonen.</p>
+        <button id="btn-close-settings">Stäng</button>
+      </aside>
+
+      <div id="editor" class="modal hidden" role="dialog" aria-label="Låteditor">
+        <div class="modal-card wide">
+          <h2>Skriv en låt</h2>
+          <p class="small">
+            En ton = <code>C4</code> (1 taktslag). Längd: <code>G4:2</code>, <code>E4:0.5</code>. Ackord: <code>[C4 E4 G4]:2</code>.
+            Paus: <code>r:1</code>. Hand: rader som börjar med <code>R:</code> (höger) eller <code>L:</code> (vänster).
+            Sångtext: <code>G4~Ja</code>. Taktstreck <code>|</code> ignoreras. Med <code>naming: svensk</code> betyder B = Bb och H = B.
+          </p>
+          <textarea id="editor-text" spellcheck="false"></textarea>
+          <div id="editor-error" class="error"></div>
+          <div class="row">
+            <button id="editor-cancel" class="ghost">Avbryt</button>
+            <button id="editor-save">Använd låten</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="finish" class="modal hidden" role="dialog" aria-label="Klart">
+        <div class="modal-card">
+          <h2 id="finish-title">Bra spelat! 🎉</h2>
+          <div class="stats">
+            <div><span id="stat-time">–</span><small>tid</small></div>
+            <div><span id="stat-acc">–</span><small>träffsäkerhet</small></div>
+            <div><span id="stat-wrong">–</span><small>fel toner</small></div>
+          </div>
+          <div class="row">
+            <button id="finish-close" class="ghost">Stäng</button>
+            <button id="finish-again">Spela igen</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="drop" class="drop hidden">Släpp MIDI- eller MusicXML-filen här</div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
