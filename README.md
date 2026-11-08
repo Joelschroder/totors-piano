@@ -11,6 +11,9 @@ npm test           # 64 tester (detektorn, import, övningslogik, layout)
 npm run build      # statisk build i dist/ – kan läggas på valfri webbhost
 ```
 
+**Live:** https://joelschroder.github.io/totors-piano/ (byggs och publiceras automatiskt via
+GitHub Actions vid varje push till `main`, se `.github/workflows/pages.yml`).
+
 Testa utan piano: spela med datorns tangentbord (`A S D F G H J K` = C–C, `W E T Y U` = svarta
 tangenter, `Z`/`X` byter oktav). Du kan också klicka eller trycka på tangenterna. `←`/`→` hoppar
 mellan steg, och `R` börjar om. **▶ Lyssna** spelar upp låten så att du hör hur den går.
