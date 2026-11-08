@@ -89,7 +89,7 @@ describe('tidslinje (väntläge)', () => {
   });
 
   test('upprepad ton (G G): två anslag klarar två steg', () => {
-    const audio = mix([{ time: 0.2, audio: tone(G4) }, { time: 0.7, audio: tone(G4) }], 1.5);
+    const audio = mix([{ time: 0.2, audio: tone(G4), length: 0.5 }, { time: 0.7, audio: tone(G4) }], 1.5);
     const ev = run(audio, [
       { time: 0, expected: [G4] },
       { time: 0.5, expected: [G4], confirmPrevious: true },
@@ -98,7 +98,7 @@ describe('tidslinje (väntläge)', () => {
   });
 
   test('snabb upprepning (G G med 250 ms mellanrum)', () => {
-    const audio = mix([{ time: 0.2, audio: tone(G4) }, { time: 0.45, audio: tone(G4) }], 1.5);
+    const audio = mix([{ time: 0.2, audio: tone(G4), length: 0.25 }, { time: 0.45, audio: tone(G4) }], 1.5);
     const ev = run(audio, [
       { time: 0, expected: [G4] },
       { time: 0.35, expected: [G4], confirmPrevious: true },

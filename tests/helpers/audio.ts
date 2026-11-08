@@ -12,12 +12,15 @@ export function synthPiano(midi: number, seconds = 1.2, amp = 0.3, sr = SR): Flo
   const out = new Float32Array(Math.floor(seconds * sr));
   const f0 = midiToFreq(midi);
   const B = 0.0004;
+  // Deterministisk "slump" så att testerna ger samma resultat varje gång.
+  let seed = midi * 7919;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
   for (let h = 1; h <= 12; h++) {
     const f = h * f0 * Math.sqrt(1 + B * h * h);
     if (f > sr / 2 - 1000) break;
     const a = (amp / h) * (h === 1 ? 1 : 0.8);
     const decay = 2 + h * 0.6;
-    const phase = Math.random() * Math.PI * 2;
+    const phase = rnd() * Math.PI * 2;
     for (let i = 0; i < out.length; i++) {
       const t = i / sr;
       const env = Math.min(1, t / 0.004) * Math.exp(-decay * t);
@@ -50,6 +53,12 @@ export interface Hit {
   time: number;
   audio: Float32Array;
   gain?: number;
+  /**
+   * Klipp tonen efter så här många sekunder (med kort uttoning). Används när
+   * samma tangent slås an igen: på ett piano anslås samma sträng på nytt, det
+   * blir inte två strängar som klingar samtidigt (vilket kan ge utsläckning).
+   */
+  length?: number;
 }
 
 /** Mixar anslag till en buffert, med lite bakgrundsbrus. */
@@ -61,7 +70,12 @@ export function mix(hits: Hit[], seconds: number, noise = 0.0005, sr = SR): Floa
   for (const h of hits) {
     const start = Math.floor(h.time * sr);
     const g = h.gain ?? 1;
-    for (let i = 0; i < h.audio.length && start + i < out.length; i++) out[start + i] += h.audio[i] * g;
+    const len = h.length !== undefined ? Math.min(h.audio.length, Math.floor(h.length * sr)) : h.audio.length;
+    const fade = Math.floor(0.005 * sr);
+    for (let i = 0; i < len && start + i < out.length; i++) {
+      const f = h.length !== undefined && i > len - fade ? (len - i) / fade : 1;
+      out[start + i] += h.audio[i] * g * f;
+    }
   }
   return out;
 }
